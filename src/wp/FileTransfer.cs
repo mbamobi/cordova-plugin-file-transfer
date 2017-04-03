@@ -24,8 +24,13 @@ using System.Windows;
 using System.Security;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 using WPCordovaClassLib.Cordova.JSON;
 using System.Reflection;
+using System.IO.IsolatedStorage;
+using Windows.Storage;
+using Windows.ApplicationModel;
+
 
 namespace WPCordovaClassLib.Cordova.Commands
 {
@@ -240,7 +245,7 @@ namespace WPCordovaClassLib.Cordova.Commands
             if (JsonDeserializeUsingJsonNet == null)
             {
                 var method = typeof(JsonHelper).GetMethod("Deserialize", new Type[] { typeof(string), typeof(bool) });
-                if (method != null) 
+                if (method != null)
                 {
                     JsonDeserializeUsingJsonNet = method.MakeGenericMethod(new Type[] { typeof(Header[]) });
                 }
@@ -597,7 +602,7 @@ namespace WPCordovaClassLib.Cordova.Commands
                     Task cookieTask = CopyCookiesFromWebBrowser(webRequest);
                     cookieTask.Wait();
                 }
-                catch (AggregateException ae) 
+                catch (AggregateException ae)
                 {
                     DispatchCommandResult(new PluginResult(PluginResult.Status.ERROR,
                         new FileTransferError(FileTransfer.ConnectionError, downloadOptions.Url, downloadOptions.FilePath, 0, ae.InnerException.Message)));
@@ -682,8 +687,9 @@ namespace WPCordovaClassLib.Cordova.Commands
         ///
         /// </summary>
         /// <param name="asynchronousResult"></param>
-        private void downloadCallback(IAsyncResult asynchronousResult)
+        private async void downloadCallback(IAsyncResult asynchronousResult)
         {
+
             DownloadRequestState reqState = (DownloadRequestState)asynchronousResult.AsyncState;
             HttpWebRequest request = reqState.request;
 
@@ -694,7 +700,7 @@ namespace WPCordovaClassLib.Cordova.Commands
 
                 // send a progress change event
                 DispatchFileTransferProgress(0, response.ContentLength, callbackId);
-
+                StorageFile storageFile1;
                 using (IsolatedStorageFile isoFile = IsolatedStorageFile.GetUserStoreForApplication())
                 {
                     // create any directories in the path that do not exist
@@ -711,10 +717,11 @@ namespace WPCordovaClassLib.Cordova.Commands
                         file.Close();
                     }
 
-                    using (FileStream fileStream = new IsolatedStorageFileStream(reqState.options.FilePath, FileMode.Open, FileAccess.Write, isoFile))
+                    using (FileStream fileStream = new IsolatedStorageFileStream(reqState.options.FilePath, FileMode.OpenOrCreate, FileAccess.Write, isoFile))
                     {
                         long totalBytes = response.ContentLength;
                         int bytesRead = 0;
+
                         using (BinaryReader reader = new BinaryReader(response.GetResponseStream()))
                         {
                             using (BinaryWriter writer = new BinaryWriter(fileStream))
@@ -731,17 +738,52 @@ namespace WPCordovaClassLib.Cordova.Commands
                                     {
                                         writer.Write(buffer);
                                         DispatchFileTransferProgress(bytesRead, totalBytes, callbackId);
+                                        System.Threading.Thread.Sleep(1);
                                     }
                                     else
                                     {
-                                        writer.Close();
-                                        reader.Close();
-                                        fileStream.Close();
                                         break;
                                     }
-                                    System.Threading.Thread.Sleep(1);
+
                                 }
+                                  writer.Close();
+                                  reader.Close();
+                                  fileStream.Close();
+                                StorageFolder installedLocation = Package.Current.InstalledLocation;
+                                StorageFile storageFile = await installedLocation.CreateFileAsync(Path.GetFileName(reqState.options.FilePath), CreationCollisionOption.OpenIfExists);
+                                storageFile1 = storageFile;
+                                Stream stream = await storageFile1.OpenStreamForWriteAsync();
+                                try
+                                {
+                                    stream.Write(buffer, 0, (int)buffer.Length);
+
+                                }
+                                finally
+                                {
+                                    if (stream != null)
+                                    {
+                                        stream.Dispose();
+                                    }
+
+                                }
+
+                                StorageFolder local = Windows.Storage.ApplicationData.Current.LocalFolder;
+                                StorageFile storedFile = await local.GetFileAsync(Path.GetFileName(reqState.options.FilePath));
+                                Deployment.Current.Dispatcher.BeginInvoke(async () =>
+                                {
+                                    {
+                                        await Windows.System.Launcher.LaunchFileAsync(storedFile);
+                                    }
+                                });
+
+                                var options = new Windows.System.LauncherOptions();
+                                options.DisplayApplicationPicker = true;
+
+
+
+
                             }
+
                         }
                     }
                     if (reqState.isCancelled)
@@ -823,7 +865,7 @@ namespace WPCordovaClassLib.Cordova.Commands
                                       callbackId);
             }
 
-            //System.Threading.Thread.Sleep(1000);
+            System.Threading.Thread.Sleep(1000);
             if (InProcDownloads.ContainsKey(reqState.options.Id))
             {
                 InProcDownloads.Remove(reqState.options.Id);
